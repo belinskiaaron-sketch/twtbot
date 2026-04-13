@@ -8,7 +8,8 @@
     "start": "node src/index.js",
     "generate": "node src/index.js --generate",
     "post": "node src/index.js --post",
-    "dev": "node src/index.js --dev"
+    "dev": "node src/index.js --dev",
+    "review": "node src/review.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.88.0",

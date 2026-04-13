@@ -6,6 +6,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const QUEUE_DIR = path.resolve(__dirname, '..', 'content-queue');
 
 const VALID_TYPES = new Set(['shortTweet', 'eduTweet', 'thread']);
+const TYPE_ORDER  = ['shortTweet', 'eduTweet', 'thread'];
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -81,8 +82,9 @@ export async function saveWeekContent(days) {
     shortTweet: day.shortTweet,
     eduTweet: day.eduTweet,
     thread: day.thread,
-    posted: { shortTweet: false, eduTweet: false, thread: false },
-    postedAt: { shortTweet: null, eduTweet: null, thread: null },
+    posted:   { shortTweet: false, eduTweet: false, thread: false },
+    postedAt: { shortTweet: null,  eduTweet: null,  thread: null  },
+    skipped:  { shortTweet: false, eduTweet: false, thread: false },
   }));
 
   const payload = {
@@ -174,4 +176,120 @@ export async function markPosted(date, type) {
   }
 
   throw new Error(`markPosted: no queue file contains an entry for date "${date}"`);
+}
+
+/**
+ * Mark one content type for a specific date as skipped.
+ * Skipped items are excluded from cron posting and review queues.
+ *
+ * @param {string} date - YYYY-MM-DD
+ * @param {'shortTweet'|'eduTweet'|'thread'} type
+ * @returns {Promise<object>} The updated day object.
+ */
+export async function markSkipped(date, type) {
+  if (!VALID_TYPES.has(type)) {
+    throw new Error(
+      `markSkipped: invalid type "${type}". Must be one of: ${[...VALID_TYPES].join(', ')}`,
+    );
+  }
+
+  const files = await listWeekFiles();
+
+  for (const file of files) {
+    let filePath, week;
+    try {
+      ({ filePath, week } = await readWeekFile(file));
+    } catch {
+      continue;
+    }
+
+    const dayIndex = week.days?.findIndex((d) => d.date === date);
+    if (dayIndex == null || dayIndex === -1) continue;
+
+    const day = week.days[dayIndex];
+    if (!day.skipped) day.skipped = { shortTweet: false, eduTweet: false, thread: false };
+    day.skipped[type] = true;
+
+    await writeWeekFile(filePath, week);
+    return day;
+  }
+
+  throw new Error(`markSkipped: no queue file contains an entry for date "${date}"`);
+}
+
+/**
+ * Overwrite the content text for one type on a given date.
+ * Used by the review CLI to persist edits.
+ *
+ * @param {string} date - YYYY-MM-DD
+ * @param {'shortTweet'|'eduTweet'|'thread'} type
+ * @param {string|string[]} newContent - String for tweets, string[] for thread.
+ * @returns {Promise<object>} The updated day object.
+ */
+export async function updateContent(date, type, newContent) {
+  if (!VALID_TYPES.has(type)) {
+    throw new Error(
+      `updateContent: invalid type "${type}". Must be one of: ${[...VALID_TYPES].join(', ')}`,
+    );
+  }
+
+  const files = await listWeekFiles();
+
+  for (const file of files) {
+    let filePath, week;
+    try {
+      ({ filePath, week } = await readWeekFile(file));
+    } catch {
+      continue;
+    }
+
+    const dayIndex = week.days?.findIndex((d) => d.date === date);
+    if (dayIndex == null || dayIndex === -1) continue;
+
+    week.days[dayIndex][type] = newContent;
+    await writeWeekFile(filePath, week);
+    return week.days[dayIndex];
+  }
+
+  throw new Error(`updateContent: no queue file contains an entry for date "${date}"`);
+}
+
+/**
+ * Return all pending (not posted, not skipped) items for today and future dates,
+ * sorted chronologically then by canonical type order (shortTweet → eduTweet → thread).
+ * Used by the review CLI to present items for human inspection.
+ *
+ * @returns {Promise<Array<{ date: string, type: string, content: string|string[] }>>}
+ */
+export async function getUpcomingContent() {
+  const today = todayString();
+  // listWeekFiles() returns newest-first; reverse for chronological review order.
+  const files = (await listWeekFiles()).reverse();
+  const items = [];
+
+  for (const file of files) {
+    let week;
+    try {
+      ({ week } = await readWeekFile(file));
+    } catch {
+      continue;
+    }
+
+    for (const day of week.days ?? []) {
+      if (day.date < today) continue; // skip past dates
+
+      for (const type of TYPE_ORDER) {
+        if (day.posted?.[type])  continue;
+        if (day.skipped?.[type]) continue;
+
+        items.push({
+          date:    day.date,
+          type,
+          content: type === 'thread' ? day.thread : day[type],
+        });
+      }
+    }
+  }
+
+  return items;
 }

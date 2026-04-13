@@ -44,6 +44,10 @@ async function jobShortTweet() {
     log('shortTweet', `Already posted for ${today.date} — skipping.`);
     return;
   }
+  if (today.skipped?.shortTweet) {
+    log('shortTweet', `Marked skipped in review for ${today.date} — skipping.`);
+    return;
+  }
 
   log('shortTweet', `Posting for ${today.date}: "${today.shortTweet}"`);
   const id = await postTweet(today.shortTweet);
@@ -66,6 +70,10 @@ async function jobEduTweet() {
     log('eduTweet', `Already posted for ${today.date} — skipping.`);
     return;
   }
+  if (today.skipped?.eduTweet) {
+    log('eduTweet', `Marked skipped in review for ${today.date} — skipping.`);
+    return;
+  }
 
   log('eduTweet', `Posting for ${today.date}: "${today.eduTweet}"`);
   const id = await postTweet(today.eduTweet);
@@ -86,6 +94,10 @@ async function jobThread() {
   }
   if (today.posted?.thread) {
     log('thread', `Already posted for ${today.date} — skipping.`);
+    return;
+  }
+  if (today.skipped?.thread) {
+    log('thread', `Marked skipped in review for ${today.date} — skipping.`);
     return;
   }
 
@@ -176,6 +188,10 @@ async function runPostNext() {
   for (const type of ['shortTweet', 'eduTweet', 'thread']) {
     if (today.posted?.[type]) {
       log('post', `${type} already posted for ${today.date} — skipping.`);
+      continue;
+    }
+    if (today.skipped?.[type]) {
+      log('post', `${type} marked skipped in review for ${today.date} — skipping.`);
       continue;
     }
 
