@@ -1,43 +1,51 @@
 import 'dotenv/config';
 import cron from 'node-cron';
-import { generateTradingContent } from './ai.js';
+import { generateWeeklyContent } from './ai.js';
 import { postTweet } from './twitter.js';
-import { formatQueueItem } from './formatter.js';
-import { saveItem, loadPending, markPosted, markFailed, pendingCount } from './queue.js';
+import { postThread } from './twitter.js';
+import { saveWeekContent, getTodayContent, markPosted } from './queue.js';
 
 // ── Content generation ──────────────────────────────────────────────────────
 
 async function generate() {
   console.log('[generate] Requesting content from Claude…');
-  const raw = await generateTradingContent();
-  const items = raw.map((tweet, i) => formatQueueItem(tweet, i));
-  await Promise.all(items.map(saveItem));
-  console.log(`[generate] Queued ${items.length} item(s).`);
-  return items;
+  const days = await generateWeeklyContent();
+  const filePath = await saveWeekContent(days);
+  console.log(`[generate] Saved ${days.length} days of content → ${filePath}`);
+  return days;
 }
 
 // ── Posting ─────────────────────────────────────────────────────────────────
 
 async function postNext() {
-  const pending = await loadPending();
-  if (pending.length === 0) {
-    console.log('[post] Queue is empty — nothing to post.');
+  const today = await getTodayContent();
+  if (!today) {
+    console.log('[post] No content for today — run generate first.');
     return null;
   }
 
-  const item = pending[0];
-  console.log(`[post] Posting item ${item.id}: "${item.text}"`);
+  // Post in order: shortTweet → eduTweet → thread (skip already-posted types)
+  for (const type of ['shortTweet', 'eduTweet', 'thread']) {
+    if (today.posted?.[type]) continue;
 
-  try {
-    const tweet = await postTweet(item.text);
-    await markPosted(item.id);
-    console.log(`[post] Posted! Tweet id: ${tweet.id}`);
-    return tweet;
-  } catch (err) {
-    await markFailed(item.id, err.message);
-    console.error(`[post] Failed to post item ${item.id}:`, err.message);
-    throw err;
+    if (type === 'thread') {
+      console.log(`[post] Posting thread for ${today.date} (${today.thread.length} tweets)…`);
+      const tweets = await postThread(today.thread);
+      await markPosted(today.date, 'thread');
+      console.log(`[post] Thread posted. First tweet id: ${tweets[0].id}`);
+      return tweets;
+    } else {
+      const text = today[type];
+      console.log(`[post] Posting ${type} for ${today.date}: "${text}"`);
+      const tweet = await postTweet(text);
+      await markPosted(today.date, type);
+      console.log(`[post] Posted! Tweet id: ${tweet.id}`);
+      return tweet;
+    }
   }
+
+  console.log(`[post] All content for ${today.date} already posted.`);
+  return null;
 }
 
 // ── Cron loop (dev mode) ─────────────────────────────────────────────────────
@@ -75,16 +83,23 @@ if (args.includes('--generate')) {
 } else if (args.includes('--post')) {
   await postNext();
 } else if (args.includes('--dev')) {
-  // Seed queue on first run if empty, then start cron
-  const count = await pendingCount();
-  if (count === 0) {
-    console.log('[dev] Queue empty — running initial generation.');
+  // Seed queue on first run if today has no content, then start cron
+  const today = await getTodayContent();
+  if (!today) {
+    console.log('[dev] No content for today — running initial generation.');
     await generate();
   }
   startCron();
 } else {
-  // Default: print queue status
-  const pending = await loadPending();
-  console.log(`Queue status: ${pending.length} item(s) pending.`);
-  pending.forEach((item, i) => console.log(`  ${i + 1}. [${item.id}] ${item.text}`));
+  // Default: print today's queue status
+  const today = await getTodayContent();
+  if (!today) {
+    console.log('No content queued for today. Run: npm run generate');
+  } else {
+    console.log(`Today (${today.date}):`);
+    for (const type of ['shortTweet', 'eduTweet', 'thread']) {
+      const status = today.posted?.[type] ? `posted at ${today.postedAt[type]}` : 'pending';
+      console.log(`  ${type}: ${status}`);
+    }
+  }
 }
