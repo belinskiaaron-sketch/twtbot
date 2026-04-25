@@ -1,2 +1,4 @@
 node_modules/
 .env
+ios-showcase/.expo/
+ios-showcase/dist/
